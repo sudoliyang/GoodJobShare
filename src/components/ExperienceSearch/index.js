@@ -1,39 +1,31 @@
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
 import ImmutablePropTypes from 'react-immutable-proptypes';
-import Helmet from 'react-helmet';
 import R from 'ramda';
 import qs from 'qs';
 import { compose, withHandlers, setStatic, lifecycle } from 'recompose';
-
 import ReactGA from 'react-ga';
 import ReactPixel from 'react-facebook-pixel';
 
 import Loader from 'common/Loader';
 import { Section, Wrapper, Heading, P } from 'common/base';
 import FanPageBlock from 'common/FanPageBlock';
+import Pagination from 'common/Pagination';
+import { pathnameSelector, querySelector } from 'common/routing/selectors';
 
 import styles from './ExperienceSearch.module.css';
 import Searchbar from './Searchbar';
 import ExperienceBlock from './ExperienceBlock';
 import { fetchExperiences as fetchExperiencesAction } from '../../actions/experienceSearch';
-import { formatTitle, formatCanonicalPath } from '../../utils/helmetHelper';
-import { imgHost, SITE_NAME } from '../../constants/helmetData';
+import { formatCanonicalPath } from '../../utils/helmetHelper';
 import PIXEL_CONTENT_CATEGORY from '../../constants/pixelConstants';
 import { PAGE_COUNT } from '../../constants/experienceSearch';
-import status from '../../constants/status';
+import { isFetching } from '../../constants/status';
 import Filter from './Filter';
 import { Banner1, Banner2 } from './Banners';
-
-import Pagination from '../common/Pagination';
-
-import getScale from '../../utils/numberUtils';
-
+import renderHelmet from './helmet';
 import { queryParser, toQsString } from './helper';
 import { GA_CATEGORY, GA_ACTION } from '../../constants/gaConstants';
-
-import { pathnameSelector, querySelector } from 'common/routing/selectors';
-
 import withRouteParameter from './withRouteParameter';
 
 const SORT = {
@@ -41,18 +33,24 @@ const SORT = {
   POPULARITY: 'popularity',
 };
 
-const searchTypeMap = {
-  work: '工作經驗',
-  interview: '面試經驗',
-  intern: '實習經驗',
-};
-
-const sortByMap = {
-  created_at: '最新',
-  popularity: '熱門',
-};
-
 const BANNER_LOCATION = 10;
+
+const toBlocks = R.map(experience => (
+  <ExperienceBlock key={experience._id} data={experience} size="l" backable />
+));
+
+const injectBannerAt = N =>
+  R.addIndex(R.chain)((row, i) => {
+    if (i === N - 1) {
+      return [<Banner2 key="banner" />, row];
+    }
+    return row;
+  });
+
+const renderBlocks = R.pipe(
+  toBlocks,
+  injectBannerAt(BANNER_LOCATION)
+);
 
 class ExperienceSearch extends Component {
   static propTypes = {
@@ -155,92 +153,25 @@ class ExperienceSearch extends Component {
     };
   };
 
-  renderBlocks = experiences => {
-    const _toBlocks = R.map(experience => (
-      <ExperienceBlock
-        key={experience._id}
-        data={experience}
-        size="l"
-        backable
-      />
-    ));
-
-    const injectBannerAt = N =>
-      R.addIndex(R.chain)((row, i) => {
-        if (i === N - 1) {
-          return [<Banner2 key="banner" />, row];
-        }
-        return row;
-      });
-
-    // 複寫原本的 toBlocks 行為，插入 Banner
-    const toBlocks = R.pipe(
-      _toBlocks,
-      injectBannerAt(BANNER_LOCATION)
-    );
-
-    return toBlocks(experiences);
-  };
-
-  renderHelmet = () => {
-    // TODO 將邏輯拆成 1. 公司職稱搜尋 2. 非搜尋，減少 if/else
-    const { searchType, searchQuery, sortBy, page } = this.props;
-
-    const count = this.props.experienceSearch.get('experienceCount');
-    const scale = getScale(count);
-    const url = this.getCanonicalUrl();
-    const searchTypeName = searchType
-      .sort()
-      .reduce((names, type) => {
-        if (searchTypeMap[type]) {
-          names.push(searchTypeMap[type]);
-        }
-        return names;
-      }, [])
-      .join('、');
-
-    // default helmet info
-    let title = '查詢面試、工作、實習經驗';
-    let description = `馬上查詢超過 ${scale} 篇面試、工作及實習經驗分享，讓我們一起把面試準備的更好，也更瞭解公司內部的真實樣貌，找到更適合自己的好工作！`;
-
-    // if searchQuery is given and number of result > 0, then show job / company name
-    if (searchQuery && count > 0) {
-      const tmpStr = `${searchQuery}的${searchTypeName}分享`;
-      title = `${tmpStr}，第 ${page} 頁`;
-      description = `馬上查看共 ${count} 篇有關${tmpStr}，讓我們一起把面試準備的更好，也更瞭解公司內部的真實樣貌，找到更適合自己的好工作！`;
-    } else if (sortBy) {
-      // if searchQuery is not given, but sortBy is given, then show 最新/熱門
-      title = `${sortByMap[sortBy]}${searchTypeName}分享 - 第 ${page} 頁`;
-      description = `馬上查詢超過 ${scale} 篇${searchTypeName}分享，讓我們一起把面試準備的更好，也更瞭解公司內部的真實樣貌，找到更適合自己的好工作！`;
-    }
-    return (
-      <Helmet
-        title={title}
-        meta={[
-          { name: 'description', content: description },
-          { property: 'og:title', content: formatTitle(title, SITE_NAME) },
-          { property: 'og:description', content: description },
-          { property: 'og:url', content: url },
-          {
-            property: 'og:image',
-            content: `${imgHost}/og/experience-search.jpg`,
-          },
-        ]}
-        link={[{ rel: 'canonical', href: url }]}
-      />
-    );
-  };
-
   render() {
     const { experienceSearch, loadingStatus } = this.props;
     const data = experienceSearch.toJS();
     const experiences = data.experiences || [];
+    const experienceCount = experienceSearch.get('experienceCount');
 
     const { searchQuery, searchBy, sort, searchType, page } = this.props;
+    const url = this.getCanonicalUrl();
 
     return (
       <Section Tag="main" pageTop paddingBottom>
-        {this.renderHelmet()}
+        {renderHelmet({
+          searchType,
+          searchQuery,
+          sort,
+          page,
+          count: experienceCount,
+          url,
+        })}
         <Wrapper size="l">
           <div className={styles.container}>
             <aside className={styles.aside}>
@@ -284,18 +215,17 @@ class ExperienceSearch extends Component {
 
               {data.searchQuery &&
                 data.experienceCount === 0 &&
-                loadingStatus !== status.FETCHING && (
+                !isFetching(loadingStatus) && (
                   <P size="l" bold className={styles.searchNoResult}>
                     尚未有「
                     {data.searchQuery}
                     」的經驗分享
                   </P>
                 )}
-              {// rendering experiences blocks and banner
-              loadingStatus === status.FETCHING ? (
+              {isFetching(loadingStatus) ? (
                 <Loader size="s" />
               ) : (
-                this.renderBlocks(experiences)
+                renderBlocks(experiences)
               )}
 
               <Pagination
